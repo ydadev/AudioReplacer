@@ -51,4 +51,3 @@ Compress-Archive -Path (Join-Path $lite '*') `
 
 Write-Host 'Build completed:'
 Get-ChildItem -LiteralPath $dist -Filter '*.zip'
-

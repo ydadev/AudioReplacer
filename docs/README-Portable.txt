@@ -17,4 +17,3 @@ FFmpeg не включён в этот архив.
 Лицензия: https://ffmpeg.org/legal.html
 Ручная загрузка: https://github.com/BtbN/FFmpeg-Builds/releases
 
-

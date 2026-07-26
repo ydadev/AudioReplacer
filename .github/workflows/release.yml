@@ -1,0 +1,47 @@
+name: Build and publish v1.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Portable and Lite
+        shell: powershell
+        run: .\build.ps1
+
+      - name: Publish release v1.0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0
+          name: AudioReplacer 1.0
+          body: |
+            Первый публичный релиз AudioReplacer.
+
+            Программа объединяет видео и внешнюю озвучку сериалов и аниме,
+            полностью заменяя исходные аудиодорожки. Это удобно для телевизоров,
+            плееров и планшетов, которые не умеют подключать внешние дорожки или
+            требуют выбирать их заново для каждой серии.
+
+            В релизе две версии:
+            - Portable — хранит FFmpeg рядом с программой;
+            - Lite — ищет установленный FFmpeg и при необходимости загружает его
+              в профиль пользователя.
+
+            FFmpeg не входит в архивы. Перед загрузкой ознакомьтесь с лицензией:
+            https://ffmpeg.org/legal.html
+          files: |
+            dist/AudioReplacer-Portable-v1.0.zip
+            dist/AudioReplacer-Lite-v1.0.zip
+

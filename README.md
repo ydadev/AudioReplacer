@@ -78,4 +78,3 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 Собранные архивы появятся в папке `dist`.
 
-
