@@ -45,3 +45,4 @@ jobs:
             dist/AudioReplacer-Portable-v1.0.zip
             dist/AudioReplacer-Lite-v1.0.zip
 
+# Release trigger: 1.0
