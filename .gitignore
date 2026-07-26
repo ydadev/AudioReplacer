@@ -1,0 +1,8 @@
+dist/
+*.user
+*.suo
+AudioReplacer.log.txt
+ffmpeg.exe
+ffprobe.exe
+
+
