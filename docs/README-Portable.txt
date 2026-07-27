@@ -8,6 +8,7 @@ AudioReplacer Portable 1.0
 3. Выберите автоматическую загрузку или скачайте ffmpeg.exe и ffprobe.exe
    самостоятельно и положите их рядом с AudioReplacer.exe.
 4. Выберите папку с видео и аудио.
+   Аудиодорожки могут находиться во вложенных подпапках.
 5. Нажмите «Найти пары», затем «Заменить звук».
 
 При автоматической загрузке FFmpeg сохраняется рядом с программой.
@@ -16,4 +17,3 @@ AudioReplacer Portable 1.0
 FFmpeg не включён в этот архив.
 Лицензия: https://ffmpeg.org/legal.html
 Ручная загрузка: https://github.com/BtbN/FFmpeg-Builds/releases
-
