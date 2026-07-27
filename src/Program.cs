@@ -230,7 +230,7 @@ namespace AudioReplacerPortable
 
             var hint = new Label
             {
-                Text = "Видео и внешняя аудиодорожка сопоставляются по имени файла.",
+                Text = "Видео ищутся в выбранной папке, аудиодорожки — также во всех подпапках.",
                 AutoSize = true,
                 Left = 12,
                 Top = 120,
@@ -375,11 +375,11 @@ namespace AudioReplacerPortable
                 return;
             }
 
-            var files = Directory.GetFiles(folder, "*", SearchOption.TopDirectoryOnly);
-            var videos = files.Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
+            var topLevelFiles = Directory.GetFiles(folder, "*", SearchOption.TopDirectoryOnly);
+            var videos = topLevelFiles.Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
                               .Where(f => !Path.GetFileName(f).StartsWith("_"))
                               .OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase).ToList();
-            var audios = files.Where(f => AudioExtensions.Contains(Path.GetExtension(f))).ToList();
+            var audios = FindAudioFilesRecursively(folder);
             var usedVideos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var usedAudios = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -427,17 +427,23 @@ namespace AudioReplacerPortable
                 AppendLog("По изменяющемуся номеру серии сопоставлено пар: " + numberedCount + ".");
         }
 
-        private static bool IsConservativeNameMatch(string videoStem, string audioStem)
+        private List<string> FindAudioFilesRecursively(string rootFolder)
         {
-            if (!audioStem.StartsWith(videoStem, StringComparison.OrdinalIgnoreCase)) return false;
-            if (audioStem.Length == videoStem.Length) return true;
-            char separator = audioStem[videoStem.Length];
-            return separator == '.' || separator == '_' || separator == '-' || separator == ' ';
-        }
+            var result = new List<string>();
+            var pending = new Stack<string>();
+            pending.Push(rootFolder);
 
-        private int AddNumberedSeriesPairs(List<string> unmatchedVideos, List<string> unmatchedAudios,
-                                           string folder, HashSet<string> usedVideos,
-                                  …1150 tokens truncated…            string selectedOutputFolder = sameFolderBox.Checked
+            while (pending.Count > 0)
+            {
+                string current = pending.Pop();
+                try
+                {
+                    result.AddRange(Directory.GetFiles(current, "*", SearchOption.TopDirectoryOnly)
+                        .Where(f => AudioExtensions.Contains(Path.GetExtension(f))));
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("ПРОПУСК…1593 tokens truncated…            string selectedOutputFolder = sameFolderBox.Checked
                 ? folderBox.Text.Trim()
                 : outputFolderBox.Text.Trim();
             if (string.IsNullOrWhiteSpace(selectedOutputFolder))
