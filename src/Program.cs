@@ -105,6 +105,50 @@ namespace AudioReplacerPortable
         }
     }
 
+    internal sealed class AudioTrackInfo
+    {
+        public int StreamIndex;
+        public string Codec;
+        public string Language;
+        public string Title;
+
+        public string CommonName
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(Title)) return Title.Trim();
+                if (!string.IsNullOrWhiteSpace(Language)) return Language.Trim();
+                return "Дорожка " + StreamIndex;
+            }
+        }
+
+        public string DisplayName
+        {
+            get
+            {
+                string details = CommonName;
+                if (!string.IsNullOrWhiteSpace(Language) &&
+                    !details.Equals(Language, StringComparison.OrdinalIgnoreCase))
+                    details += " / " + Language;
+                if (!string.IsNullOrWhiteSpace(Codec)) details += " / " + Codec.ToUpperInvariant();
+                return StreamIndex + ": " + details;
+            }
+        }
+    }
+
+    internal sealed class VideoAudioInfo
+    {
+        public string VideoPath;
+        public List<AudioTrackInfo> Tracks = new List<AudioTrackInfo>();
+    }
+
+    internal sealed class CaptureResult
+    {
+        public int ExitCode;
+        public string Output;
+        public string Error;
+    }
+
     internal sealed class MainForm : Form
     {
         private static readonly HashSet<string> VideoExtensions = new HashSet<string>(
@@ -132,9 +176,28 @@ namespace AudioReplacerPortable
         private readonly CheckBox overwriteBox = new CheckBox();
         private readonly PictureBox duckPicture = new PictureBox();
         private readonly List<MediaPair> pairs = new List<MediaPair>();
+        private readonly TabControl mainTabs = new TabControl();
+        private readonly TabPage replaceTab = new TabPage("Замена аудиодорожек");
+        private readonly TabPage removeTab = new TabPage("Убрать аудиодорожки");
+        private readonly TextBox removeFolderBox = new TextBox();
+        private readonly Button removeFolderButton = new Button();
+        private readonly CheckBox removeSameFolderBox = new CheckBox();
+        private readonly TextBox removeOutputBox = new TextBox();
+        private readonly Button removeOutputButton = new Button();
+        private readonly Button removeScanButton = new Button();
+        private readonly CheckBox removeOverwriteBox = new CheckBox();
+        private readonly DataGridView removeGrid = new DataGridView();
+        private readonly ComboBox commonTrackCombo = new ComboBox();
+        private readonly Button removeTracksButton = new Button();
+        private readonly Button removeCancelButton = new Button();
+        private readonly ProgressBar removeProgress = new ProgressBar();
+        private readonly Label removeStatusLabel = new Label();
+        private readonly TextBox removeLogBox = new TextBox();
+        private readonly List<VideoAudioInfo> removeItems = new List<VideoAudioInfo>();
         private Process currentProcess;
         private bool cancelRequested;
         private bool checkingTools;
+        private bool removeOperationActive;
         private string resolvedFfmpegPath;
         private string resolvedFfprobePath;
 
@@ -151,13 +214,18 @@ namespace AudioReplacerPortable
 
         public MainForm()
         {
-            Text = "Замена аудиодорожек";
+            Text = "AudioReplacer";
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(780, 590);
-            Size = new Size(900, 680);
+            MinimumSize = new Size(900, 650);
+            Size = new Size(1000, 760);
             Font = new Font("Segoe UI", 9F);
             AllowDrop = true;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            mainTabs.Dock = DockStyle.Fill;
+            mainTabs.TabPages.Add(replaceTab);
+            mainTabs.TabPages.Add(removeTab);
+            Controls.Add(mainTabs);
 
             var folderLabel = new Label { Text = "Рабочая папка:", AutoSize = true, Left = 12, Top = 18 };
             folderBox.Left = 115;
@@ -279,11 +347,12 @@ namespace AudioReplacerPortable
             logBox.WordWrap = false;
             logBox.Font = new Font("Consolas", 8.5F);
 
-            Controls.AddRange(new Control[] {
+            replaceTab.Controls.AddRange(new Control[] {
                 folderLabel, folderBox, browseButton, sameFolderBox, outputLabel, outputFolderBox,
                 outputBrowseButton, duckPicture, scanButton, overwriteBox, hint, pairList,
                 startButton, cancelButton, progress, statusLabel, logBox
             });
+            InitializeRemoveTab();
 
             DragEnter += delegate(object sender, DragEventArgs e)
             {
@@ -306,247 +375,98 @@ namespace AudioReplacerPortable
             Shown += async delegate { await EnsureToolsAvailable(true); };
         }
 
-        private async void BrowseClicked(object sender, EventArgs e)
+        private void InitializeRemoveTab()
         {
-            using (var dialog = new FolderBrowserDialog())
+            var sourceLabel = new Label
             {
-                dialog.Description = "Выберите папку с видео и аудиодорожками";
-                if (Directory.Exists(folderBox.Text)) dialog.SelectedPath = folderBox.Text;
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    folderBox.Text = dialog.SelectedPath;
-                    if (sameFolderBox.Checked) outputFolderBox.Text = dialog.SelectedPath;
-                    if (await EnsureToolsAvailable(true)) ScanFolder();
-                }
-            }
-        }
+                Text = "Папка с видео:",
+                AutoSize = true,
+                Left = 12,
+                Top = 19
+            };
+            removeFolderBox.Left = 125;
+            removeFolderBox.Top = 15;
+            removeFolderBox.Width = 690;
+            removeFolderBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
-        private async void OutputBrowseClicked(object sender, EventArgs e)
-        {
-            using (var dialog = new FolderBrowserDialog())
+            removeFolderButton.Text = "Выбрать…";
+            removeFolderButton.Left = 825;
+            removeFolderButton.Top = 13;
+            removeFolderButton.Width = 95;
+            removeFolderButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            removeFolderButton.Click += RemoveFolderClicked;
+
+            removeSameFolderBox.Text = "Записывать в ту же папку";
+            removeSameFolderBox.AutoSize = true;
+            removeSameFolderBox.Left = 12;
+            removeSameFolderBox.Top = 53;
+            removeSameFolderBox.Checked = true;
+            removeSameFolderBox.CheckedChanged += delegate
             {
-                dialog.Description = "Выберите папку для готовых файлов";
-                if (Directory.Exists(outputFolderBox.Text)) dialog.SelectedPath = outputFolderBox.Text;
-                if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
-                    outputFolderBox.Text = dialog.SelectedPath;
-                    if (await EnsureToolsAvailable(true)) ScanFolder();
-                }
-            }
-        }
+                removeOutputBox.Enabled = !removeSameFolderBox.Checked;
+                removeOutputButton.Enabled = !removeSameFolderBox.Checked;
+                if (removeSameFolderBox.Checked)
+                    removeOutputBox.Text = removeFolderBox.Text.Trim();
+            };
 
-        private void ScanFolder()
-        {
-            pairs.Clear();
-            pairList.Items.Clear();
-            logBox.Clear();
-            startButton.Enabled = false;
-
-            var folder = folderBox.Text.Trim();
-            if (!Directory.Exists(folder))
+            var outputLabel = new Label
             {
-                MessageBox.Show(this, "Указанная папка не существует.", "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            string outputFolder = sameFolderBox.Checked ? folder : outputFolderBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(outputFolder))
+                Text = "Папка результата:",
+                AutoSize = true,
+                Left = 205,
+                Top = 54
+            };
+            removeOutputBox.Left = 330;
+            removeOutputBox.Top = 49;
+            removeOutputBox.Width = 485;
+            removeOutputBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            removeOutputBox.Enabled = false;
+
+            removeOutputButton.Text = "Выбрать…";
+            removeOutputButton.Left = 825;
+            removeOutputButton.Top = 47;
+            removeOutputButton.Width = 95;
+            removeOutputButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            removeOutputButton.Enabled = false;
+            removeOutputButton.Click += RemoveOutputClicked;
+
+            removeScanButton.Text = "Сканировать";
+            removeScanButton.Left = 12;
+            removeScanButton.Top = 83;
+            removeScanButton.Width = 115;
+            removeScanButton.Click += RemoveScanClicked;
+
+            removeOverwriteBox.Text = "Перезаписывать существующие файлы с _";
+            removeOverwriteBox.AutoSize = true;
+            removeOverwriteBox.Left = 142;
+            removeOverwriteBox.Top = 88;
+
+            var commonLabel = new Label
             {
-                MessageBox.Show(this, "Выберите папку для готовых файлов.", "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            try
-            {
-                if (!Directory.Exists(outputFolder)) Directory.CreateDirectory(outputFolder);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Не удалось открыть папку результата:\r\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            outputFolderBox.Text = outputFolder;
-            if (!File.Exists(FfmpegPath) || !File.Exists(FfprobePath))
-            {
-                MessageBox.Show(this, "FFmpeg и FFprobe не найдены. Перезапустите программу " +
-                    "и разрешите автоматическую загрузку либо установите их самостоятельно.",
-                    "Не хватает FFmpeg", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+                Text = "Одинаковая дорожка для всех:",
+                AutoSize = true,
+                Left = 450,
+                Top = 89,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            commonTrackCombo.Left = 650;
+            commonTrackCombo.Top = 83;
+            commonTrackCombo.Width = 270;
+            commonTrackCombo.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            commonTrackCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            commonTrackCombo.Enabled = false;
+            commonTrackCombo.SelectedIndexChanged += CommonTrackChanged;
 
-            var topLevelFiles = Directory.GetFiles(folder, "*", SearchOption.TopDirectoryOnly);
-            var videos = topLevelFiles.Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
-                              .Where(f => !Path.GetFileName(f).StartsWith("_"))
-                              .OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase).ToList();
-            var audios = FindAudioFilesRecursively(folder);
-            var usedVideos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var usedAudios = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var video in videos)
-            {
-                string videoStem = Path.GetFileNameWithoutExtension(video);
-                var exact = audios.Where(a => string.Equals(Path.GetFileNameWithoutExtension(a), videoStem,
-                                             StringComparison.OrdinalIgnoreCase)).ToList();
-                List<string> candidates = exact;
-                if (candidates.Count == 0)
-                {
-                    candidates = audios.Where(a => IsConservativeNameMatch(videoStem,
-                        Path.GetFileNameWithoutExtension(a))).ToList();
-                }
-                if (candidates.Count == 1)
-                {
-                    var pair = new MediaPair
-                    {
-                        Video = video,
-                        Audio = candidates[0],
-                        Output = Path.Combine(outputFolder, "_" + Path.GetFileName(video)),
-                        MatchType = "по имени"
-                    };
-                    pairs.Add(pair);
-                    pairList.Items.Add(pair);
-                    usedVideos.Add(video);
-                    usedAudios.Add(candidates[0]);
-                }
-                else if (candidates.Count > 1)
-                {
-                    AppendLog("ПРОПУСК: несколько аудиофайлов подходят к " + Path.GetFileName(video));
-                }
-            }
-
-            int numberedCount = AddNumberedSeriesPairs(
-                videos.Where(v => !usedVideos.Contains(v)).ToList(),
-                audios.Where(a => !usedAudios.Contains(a)).ToList(),
-                outputFolder, usedVideos, usedAudios);
-
-            statusLabel.Text = "Найдено пар: " + pairs.Count + ". Видео без однозначной пары не обрабатываются.";
-            startButton.Enabled = pairs.Count > 0;
-            AppendLog("Сканирование: видео — " + videos.Count + ", аудио — " + audios.Count +
-                      ", однозначных пар — " + pairs.Count + ".");
-            if (numberedCount > 0)
-                AppendLog("По изменяющемуся номеру серии сопоставлено пар: " + numberedCount + ".");
-        }
-
-        private List<string> FindAudioFilesRecursively(string rootFolder)
-        {
-            var result = new List<string>();
-            var pending = new Stack<string>();
-            pending.Push(rootFolder);
-
-            while (pending.Count > 0)
-            {
-                string current = pending.Pop();
-                try
-                {
-                    result.AddRange(Directory.GetFiles(current, "*", SearchOption.TopDirectoryOnly)
-                        .Where(f => AudioExtensions.Contains(Path.GetExtension(f))));
-                }
-                catch (Exception ex)
-                {
-                    AppendLog("ПРОПУСК…1593 tokens truncated…            string selectedOutputFolder = sameFolderBox.Checked
-                ? folderBox.Text.Trim()
-                : outputFolderBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(selectedOutputFolder))
-            {
-                MessageBox.Show(this, "Выберите папку для готовых файлов.", "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            try
-            {
-                if (!Directory.Exists(selectedOutputFolder))
-                    Directory.CreateDirectory(selectedOutputFolder);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Не удалось открыть папку результата:\r\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            // Путь результата мог быть изменён после сканирования. Всегда используем
-            // текущее значение интерфейса непосредственно перед обработкой.
-            foreach (var pair in pairs)
-                pair.Output = Path.Combine(selectedOutputFolder, "_" + Path.GetFileName(pair.Video));
-
-            SetBusy(true);
-            cancelRequested = false;
-            progress.Minimum = 0;
-            progress.Maximum = pairs.Count;
-            progress.Value = 0;
-            int success = 0;
-            int skipped = 0;
-            int failed = 0;
-
-            AppendLog("=== Начало обработки " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " ===");
-            AppendLog("Папка результата: " + selectedOutputFolder);
-            for (int i = 0; i < pairs.Count; i++)
-            {
-                if (cancelRequested) break;
-                var pair = pairs[i];
-                pairList.SelectedIndex = i;
-                statusLabel.Text = "Обработка " + (i + 1) + " из " + pairs.Count + ": " +
-                                   Path.GetFileName(pair.Video);
-
-                if (File.Exists(pair.Output) && !overwriteBox.Checked)
-                {
-                    AppendLog("ПРОПУСК: уже существует " + Path.GetFileName(pair.Output));
-                    skipped++;
-                    progress.Value = i + 1;
-                    continue;
-                }
-
-                bool ok = await ProcessPair(pair);
-                if (ok) success++; else if (!cancelRequested) failed++;
-                progress.Value = i + 1;
-            }
-
-            AppendLog("=== Готово. Успешно: " + success + "; пропущено: " + skipped +
-                      "; ошибок: " + failed + " ===");
-            SaveLog();
-            SetBusy(false);
-            statusLabel.Text = cancelRequested ? "Операция отменена. Лог сохранён." :
-                "Готово. Успешно: " + success + ", пропущено: " + skipped + ", ошибок: " + failed + ".";
-            MessageBox.Show(this, statusLabel.Text, "Замена аудиодорожек",
-                MessageBoxButtons.OK, failed == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-        }
-
-        private async Task<bool> EnsureToolsAvailable(bool offerDownload)
-        {
-            if (checkingTools) return false;
-            checkingTools = true;
-            try
-            {
-                string[] tools = FindInstalledTools();
-                if (tools != null)
-                {
-                    resolvedFfmpegPath = tools[0];
-                    resolvedFfprobePath = tools[1];
-                    statusLabel.Text = "FFmpeg найден: " + Path.GetDirectoryName(resolvedFfmpegPath);
-                    return true;
-                }
-                if (!offerDownload) return false;
-
-                DialogResult answer;
-                using (var setupDialog = new FfmpegSetupDialog())
-                    answer = setupDialog.ShowDialog(this);
-
-                if (answer == DialogResult.No)
-                {
-                    try { Process.Start(RepositoryUrl); } catch { }
-                    MessageBox.Show(this,
-                        PortableFolderMode
-                            ? "После загрузки положите ffmpeg.exe и ffprobe.exe рядом с " +
-                              "AudioReplacer.exe, затем перезапустите программу."
-                            : "После загрузки положите ffmpeg.exe и ffprobe.exe рядом с " +
-                              "AudioReplacer.exe либо добавьте папку с ними в PATH, затем перезапустите программу.",
-                        "Самостоятельная установка", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return false;
-                }
-                if (answer != DialogResult.Yes) return false;
-
-                SetToolDownloadState(true);
-                statusLabel.Text = "Загрузка FFmpeg с GitHub…";
+            removeGrid.Left = 12;
+            removeGrid.Top = 120;
+            removeGrid.Width = 908;
+            removeGrid.Height = 280;
+            removeGrid.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            removeGrid.AllowUserToAddRows = false;
+            removeGrid.AllowUserToDeleteRows = false;
+            removeGrid.AllowUserToResizeRows = false;
+            removeGrid.RowHeadersVisible = false;
+            removeGrid.AutoGenerate…8612 tokens truncated…             statusLabel.Text = "Загрузка FFmpeg с GitHub…";
                 AppendLog("FFmpeg не найден. Начата автоматическая загрузка: " + DownloadUrl);
 
                 string[] installed = await Task.Factory.StartNew<string[]>(DownloadAndInstallTools);
@@ -699,6 +619,10 @@ namespace AudioReplacerPortable
             outputBrowseButton.Enabled = !busy && !sameFolderBox.Checked;
             scanButton.Enabled = !busy;
             startButton.Enabled = !busy && pairs.Count > 0;
+            removeFolderButton.Enabled = !busy;
+            removeOutputButton.Enabled = !busy && !removeSameFolderBox.Checked;
+            removeScanButton.Enabled = !busy;
+            removeTracksButton.Enabled = !busy && removeItems.Count > 0;
             cancelButton.Enabled = false;
         }
 
@@ -780,11 +704,95 @@ namespace AudioReplacerPortable
                 case ".mts":
                 case ".m2ts": return " -f mpegts";
                 case ".flv": return " -f flv";
+                case ".wmv": return " -f asf";
                 case ".mpg":
                 case ".mpeg":
                 case ".vob": return " -f mpeg";
                 default: return "";
             }
+        }
+
+        private async Task<List<AudioTrackInfo>> ProbeAudioTracks(string videoPath)
+        {
+            string arguments = "-v error -select_streams a " +
+                "-show_entries stream=index,codec_name:stream_tags=language,title " +
+                "-of compact=p=0:nk=0 " + Q(videoPath);
+            CaptureResult result = await RunProcessCapture(FfprobePath, arguments);
+            if (result.ExitCode != 0)
+                throw new InvalidDataException("FFprobe: " + result.Error.Trim());
+
+            var tracks = new List<AudioTrackInfo>();
+            string[] lines = (result.Output ?? "").Split(
+                new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string part in line.Split('|'))
+                {
+                    int separator = part.IndexOf('=');
+                    if (separator > 0)
+                        values[part.Substring(0, separator)] =
+                            part.Substring(separator + 1).Replace("\\|", "|")
+                                .Replace("\\=", "=").Replace("\\\\", "\\");
+                }
+
+                int index;
+                string indexText;
+                if (!values.TryGetValue("index", out indexText) ||
+                    !int.TryParse(indexText, out index)) continue;
+
+                string codec;
+                string language;
+                string title;
+                values.TryGetValue("codec_name", out codec);
+                values.TryGetValue("tag:language", out language);
+                values.TryGetValue("tag:title", out title);
+                tracks.Add(new AudioTrackInfo
+                {
+                    StreamIndex = index,
+                    Codec = codec ?? "",
+                    Language = language ?? "",
+                    Title = title ?? ""
+                });
+            }
+            return tracks;
+        }
+
+        private Task<CaptureResult> RunProcessCapture(string fileName, string arguments)
+        {
+            return Task.Factory.StartNew(delegate
+            {
+                var process = new Process();
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = AppDirectory
+                };
+                currentProcess = process;
+                try
+                {
+                    process.Start();
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+                    return new CaptureResult
+                    {
+                        ExitCode = process.ExitCode,
+                        Output = output,
+                        Error = error
+                    };
+                }
+                finally
+                {
+                    if (ReferenceEquals(currentProcess, process)) currentProcess = null;
+                    process.Dispose();
+                }
+            });
         }
 
         private Task<int> RunProcess(string fileName, string arguments, bool captureErrors)
@@ -809,7 +817,11 @@ namespace AudioReplacerPortable
                     if (!string.IsNullOrWhiteSpace(e.Data) &&
                         (e.Data.Contains("Error") || e.Data.Contains("Invalid") ||
                          e.Data.Contains("failed") || e.Data.Contains("Unable")))
-                        BeginInvoke(new Action(delegate { AppendLog("FFmpeg: " + e.Data); }));
+                        BeginInvoke(new Action(delegate
+                        {
+                            if (removeOperationActive) AppendRemoveLog("FFmpeg: " + e.Data);
+                            else AppendLog("FFmpeg: " + e.Data);
+                        }));
                 };
             }
             process.Exited += delegate
@@ -856,18 +868,43 @@ namespace AudioReplacerPortable
             cancelButton.Enabled = busy;
         }
 
+        private void SetRemoveBusy(bool busy)
+        {
+            removeFolderBox.Enabled = !busy;
+            removeFolderButton.Enabled = !busy;
+            removeSameFolderBox.Enabled = !busy;
+            removeOutputBox.Enabled = !busy && !removeSameFolderBox.Checked;
+            removeOutputButton.Enabled = !busy && !removeSameFolderBox.Checked;
+            removeScanButton.Enabled = !busy;
+            removeOverwriteBox.Enabled = !busy;
+            removeGrid.Enabled = !busy;
+            commonTrackCombo.Enabled = !busy && commonTrackCombo.Items.Count > 0;
+            removeTracksButton.Enabled = !busy && removeItems.Count > 0;
+            removeCancelButton.Enabled = busy;
+        }
+
         private void AppendLog(string text)
         {
             logBox.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + text +
                               Environment.NewLine);
         }
 
+        private void AppendRemoveLog(string text)
+        {
+            removeLogBox.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + text +
+                                    Environment.NewLine);
+        }
+
         private void SaveLog()
         {
             try
             {
+                string combined = "=== Замена аудиодорожек ===" + Environment.NewLine +
+                                  logBox.Text + Environment.NewLine +
+                                  "=== Убрать аудиодорожки ===" + Environment.NewLine +
+                                  removeLogBox.Text;
                 File.WriteAllText(Path.Combine(AppDirectory, "AudioReplacer.log.txt"),
-                                  logBox.Text, new UTF8Encoding(true));
+                                  combined, new UTF8Encoding(true));
             }
             catch { }
         }
